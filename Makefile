@@ -25,10 +25,13 @@ clsact:
 	/usr/bin/touch clsact
 
 bpf_load: clsact $(BPF_PROG)
+	sudo /sbin/tc filter del dev $(DEV) ingress || true
 	sudo /sbin/tc filter del dev $(DEV) egress || true
-	sudo /sbin/tc filter add dev $(DEV) egress bpf da obj $(BPF_PROG) sec tc
+	sudo /sbin/tc filter add dev $(DEV) ingress bpf da obj $(BPF_PROG) sec ingress
+	sudo /sbin/tc filter add dev $(DEV) egress bpf da obj $(BPF_PROG) sec egress
 
 bpf_unload:
+	sudo /sbin/tc filter del dev $(DEV) ingress || true
 	sudo /sbin/tc filter del dev $(DEV) egress || true
 	sudo /sbin/tc qdisc del dev $(DEV) clsact || true
 	rm -f clsact
@@ -41,6 +44,7 @@ xdp_unload:
 
 show:
 	sudo ip link show dev $(DEV)
+	/sbin/tc filter show dev $(DEV) ingress
 	/sbin/tc filter show dev $(DEV) egress
 
 debug:

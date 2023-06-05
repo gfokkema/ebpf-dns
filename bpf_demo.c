@@ -1,7 +1,7 @@
 #include "bpf_demo.h"
 #include <linux/pkt_cls.h>
 
-SEC("tc")
+SEC("egress")
 int read_dns(struct __sk_buff *skb)
 {
     __u16 eth_proto;
@@ -32,7 +32,7 @@ int read_dns(struct __sk_buff *skb)
     return TC_ACT_OK;
 }
 
-SEC("tc")
+SEC("ingress")
 int write_dns(struct __sk_buff *skb)
 {
     return TC_ACT_OK;
