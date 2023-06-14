@@ -11,6 +11,9 @@ int read_dns(struct __sk_buff *skb)
     struct ipv6hdr *ipv6;
     struct udphdr *udp;
     struct dnshdr *dns;
+
+    __u8 *qname;
+    struct dns_qrr *qrr;
  
     cursor_init(&c, skb);
     if (!(eth = parse_eth(&c, &eth_proto)))
@@ -26,7 +29,28 @@ int read_dns(struct __sk_buff *skb)
             return TC_ACT_OK;
         if (!(dns = parse_dnshdr(&c)))
             return TC_ACT_OK;
-        debug_v4("TC", ipv4, udp);
+        if (!(qname = parse_dname(&c, (void*)dns))
+        ||  !(qrr = parse_dns_qrr(&c)))
+            return TC_ACT_OK;
+        debug_v4("TC IP4", ipv4, udp);
+        debug_dns("TC DNS", dns);
+        debug_qrr("TC QRR", qrr, qname);
+
+        __u8 size = (__u8*)qrr - (__u8*)qname;
+        if (size > sizeof(struct key))
+            return TC_ACT_OK;
+
+        struct key key = {0};
+        bpf_probe_read_kernel(&key, size, qname);
+
+        struct value *value = bpf_map_lookup_elem(&dns_results, &key);
+        struct value newval = {1};
+        if (value)
+        {
+            newval.count = value->count + 1;
+            bpf_printk("TC MAP: %s: %d", key.domain, newval.count);
+        }
+        bpf_map_update_elem(&dns_results, &key, &newval, BPF_ANY);
     }
 
     return TC_ACT_OK;
