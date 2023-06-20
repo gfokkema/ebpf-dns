@@ -6,6 +6,7 @@
 #include <linux/ip.h>
 #include <linux/ipv6.h>
 #include <linux/udp.h>
+#include <linux/tcp.h>
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>
 
@@ -19,7 +20,7 @@
 
 #define IS_PORT(U, P)    (__bpf_htons(U->source) == P || __bpf_htons(U->dest) == P)
 #define IS_DNS(U)        IS_PORT(U, DNS_PORT)
-#define IS_DNS_ANSWER(P) (__bpf_ntohs(P->arcount) > 0)
+#define IS_DNS_ANSWER(P) ((P)->flags.as_bits_and_pieces.qr == 1)
 
 struct cursor
 {
@@ -54,6 +55,11 @@ struct dnshdr {
     __u16 ancount;
     __u16 nscount;
     __u16 arcount;
+};
+
+struct tcpdnshdr {
+    __u16 length;
+    struct dnshdr dnshdr;
 };
 
 struct dns_qrr {
@@ -93,7 +99,9 @@ PARSE_FUNC_DECLARATION(vlanhdr)
 PARSE_FUNC_DECLARATION(iphdr)
 PARSE_FUNC_DECLARATION(ipv6hdr)
 PARSE_FUNC_DECLARATION(udphdr)
+PARSE_FUNC_DECLARATION(tcphdr)
 PARSE_FUNC_DECLARATION(dnshdr)
+PARSE_FUNC_DECLARATION(tcpdnshdr)
 PARSE_FUNC_DECLARATION(dns_qrr)
 
 static __always_inline
@@ -120,6 +128,18 @@ struct ethhdr *parse_eth(struct cursor *c, __u16 *eth_proto)
         }
     }
     return eth;
+}
+
+static __always_inline
+struct tcphdr *parse_tcp(struct cursor *c)
+{
+    struct tcphdr *tcphdr;
+    struct cursor o = *c;
+    if (!(tcphdr = parse_tcphdr(&o)))
+        return 0;
+
+    c->pos += tcphdr->doff * 4;
+    return tcphdr;
 }
 
 static __always_inline
@@ -168,21 +188,21 @@ void debug_print(char* pre, struct ethhdr *eth, struct udphdr *udp, struct dnshd
 }
 
 static __always_inline
-void debug_v4(char* pre, struct iphdr *ipv4, struct udphdr *udp)
+void debug_v4(char* pre, struct iphdr *ipv4, __u16 source, __u16 dest)
 {
     __u8 saddr[4];
     __u8 daddr[4];
     memcpy(saddr, &ipv4->saddr, 4);
     memcpy(daddr, &ipv4->daddr, 4);
-    bpf_printk("%s: %d.%d.%d.%d -> %d.%d.%d.%d",
+    bpf_printk("%s: %d.%d.%d.%d:%d -> %d.%d.%d.%d:%d",
         pre,
-        saddr[0], saddr[1], saddr[2], saddr[3],
-        daddr[0], daddr[1], daddr[2], daddr[3]
+        saddr[0], saddr[1], saddr[2], saddr[3], __bpf_htons(source),
+        daddr[0], daddr[1], daddr[2], daddr[3], __bpf_htons(dest)
     );
 }
 
 static __always_inline
-void debug_v6(struct ipv6hdr *ipv6, struct udphdr *udp)
+void debug_v6(struct ipv6hdr *ipv6)
 {
 
 }
@@ -190,19 +210,21 @@ void debug_v6(struct ipv6hdr *ipv6, struct udphdr *udp)
 static __always_inline
 void debug_dns(char* pre, struct dnshdr *dns)
 {
-    bpf_printk("%s: id:%d tc: %d qd:%d an:%d",
+    bpf_printk("%s: id:%d tc: %d qd:%d an:%d ns:%d, ar:%d",
         pre,
         __bpf_htons(dns->id),
         dns->flags.as_bits_and_pieces.tc,
         __bpf_htons(dns->qdcount),
-        __bpf_htons(dns->ancount)
+        __bpf_htons(dns->ancount),
+        __bpf_htons(dns->nscount),
+        __bpf_htons(dns->arcount)
     );
 }
 
 static __always_inline
 void debug_qrr(char* pre, struct dns_qrr* qrr, __u8* qname)
 {
-    bpf_printk("%s: qcls:%d qty:%d | %s",
+    bpf_printk("%s: qcls:%d qty:%d | \"%s\"",
         pre,
         __bpf_htons(qrr->qclass),
         __bpf_htons(qrr->qtype),

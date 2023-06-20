@@ -1,20 +1,69 @@
 #include "bpf_demo.h"
 #include <linux/pkt_cls.h>
 
+static __always_inline
+int outgoing_udp_dns(struct cursor c, struct iphdr *ip, struct udphdr *udp, struct dnshdr *dns)
+{
+    debug_v4("TC UDP IP4", ip, udp->source, udp->dest);
+    debug_dns("TC UDP DNS", dns);
+
+    __u8 *qname;
+    struct dns_qrr *qrr;
+
+    if (!(qname = parse_dname(&c, (void*)dns))
+    ||  !(qrr = parse_dns_qrr(&c)))
+        return TC_ACT_OK;
+    debug_qrr("TC UDP QRR", qrr, qname);
+
+    if (!(dns->flags.as_bits_and_pieces.tc))
+    {
+        bpf_printk("TC UDP IP4: not truncated");
+        return TC_ACT_OK;
+    }
+    bpf_printk("TC UDP IP4: truncated, storing in map");
+
+    __u8 size = (__u8*)qrr - (__u8*)qname;
+    if (size > sizeof(struct key))
+        return TC_ACT_OK;
+
+    struct key key = {0};
+    bpf_probe_read_kernel(&key, size, qname);
+
+    struct value *value = bpf_map_lookup_elem(&dns_results, &key);
+    struct value newval = {1};
+    if (value)
+    {
+        newval.count = value->count + 1;
+        bpf_printk("TC UDP MAP: %s: %d", key.domain, newval.count);
+    }
+    bpf_map_update_elem(&dns_results, &key, &newval, BPF_ANY);
+
+    return TC_ACT_OK;
+}
+
+static __always_inline
+int outgoing_tcp_dns(struct cursor c, struct iphdr *ip, struct tcphdr *tcp, struct tcpdnshdr *dns)
+{
+    debug_v4("TC TCP IP4", ip, tcp->source, tcp->dest);
+    debug_dns("TC TCP DNS", &dns->dnshdr);
+
+    return TC_ACT_OK;
+}
+
 SEC("egress")
 int read_dns(struct __sk_buff *skb)
 {
     __u16 eth_proto;
     struct cursor c;
     struct ethhdr *eth;
-    struct iphdr *ipv4;
+    struct iphdr *ip4;
     // struct ipv6hdr *ipv6;
     struct udphdr *udp;
+    struct tcphdr *tcp;
     struct dnshdr *dns;
-
-    __u8 *qname;
-    struct dns_qrr *qrr;
+    struct tcpdnshdr *tcpdns;
  
+    bpf_skb_pull_data(skb, skb->len);
     cursor_init(&c, skb);
     if (!(eth = parse_eth(&c, &eth_proto))
     ||  !(IS_IPV4(eth_proto) || IS_IPV6(eth_proto)))
@@ -22,45 +71,24 @@ int read_dns(struct __sk_buff *skb)
 
     if (IS_IPV4(eth_proto))
     {
-        if (!(ipv4 = parse_iphdr(&c))
-        ||  !(ipv4->protocol == IPPROTO_UDP)
-        ||  !(udp = parse_udphdr(&c))
-        ||  !IS_DNS(udp)
-        ||  !(dns = parse_dnshdr(&c)))
+        if (!(ip4 = parse_iphdr(&c)))
             return TC_ACT_OK;
 
-        debug_v4("TC IP4", ipv4, udp);
-        debug_dns("TC DNS", dns);
-
-        if (!IS_DNS_ANSWER(dns)
-        ||  !(dns->flags.as_bits_and_pieces.tc))
+        if (ip4->protocol == IPPROTO_UDP)
         {
-            bpf_printk("TC IP4: no answer or not truncated");
-            return TC_ACT_OK;
+            if (!(udp = parse_udphdr(&c)) || !IS_DNS(udp)
+            ||  !(dns = parse_dnshdr(&c)) || !IS_DNS_ANSWER(dns))
+                return TC_ACT_OK;
+            return outgoing_udp_dns(c, ip4, udp, dns);
         }
-        bpf_printk("TC IP4: truncated, storing in map");
 
-        __u8 size = (__u8*)qrr - (__u8*)qname;
-        if (!(qname = parse_dname(&c, (void*)dns))
-        ||  !(qrr = parse_dns_qrr(&c)))
-            return TC_ACT_OK;
-
-        debug_qrr("TC QRR", qrr, qname);
-
-        if (size > sizeof(struct key))
-            return TC_ACT_OK;
-
-        struct key key = {0};
-        bpf_probe_read_kernel(&key, size, qname);
-
-        struct value *value = bpf_map_lookup_elem(&dns_results, &key);
-        struct value newval = {1};
-        if (value)
+        if (ip4->protocol == IPPROTO_TCP)
         {
-            newval.count = value->count + 1;
-            bpf_printk("TC MAP: %s: %d", key.domain, newval.count);
+            if (!(tcp    = parse_tcp(&c))       || !IS_DNS(tcp)
+            ||  !(tcpdns = parse_tcpdnshdr(&c)) || !IS_DNS_ANSWER(&tcpdns->dnshdr))
+                return TC_ACT_OK;
+            return outgoing_tcp_dns(c, ip4, tcp, tcpdns);
         }
-        bpf_map_update_elem(&dns_results, &key, &newval, BPF_ANY);
     }
 
     return TC_ACT_OK;
