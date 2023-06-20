@@ -17,8 +17,9 @@
 #define IS_IPV6(P) P == __bpf_htons(ETH_P_IPV6)
 #define IS_VLAN(P) P == __bpf_htons(ETH_P_8021Q) || P == __bpf_htons(ETH_P_8021AD)
 
-#define IS_PORT(U, P) (__bpf_htons(U->source) == P || __bpf_htons(U->dest) == P)
-#define IS_DNS(U)     IS_PORT(U, DNS_PORT)
+#define IS_PORT(U, P)    (__bpf_htons(U->source) == P || __bpf_htons(U->dest) == P)
+#define IS_DNS(U)        IS_PORT(U, DNS_PORT)
+#define IS_DNS_ANSWER(P) (__bpf_ntohs(P->arcount) > 0)
 
 struct cursor
 {
@@ -207,4 +208,11 @@ void debug_qrr(char* pre, struct dns_qrr* qrr, __u8* qname)
         __bpf_htons(qrr->qtype),
         qname
     );
+}
+
+static __always_inline
+int debug_return(char* msg, __u8 ret)
+{
+    bpf_printk("TC IP4: not truncated");
+    return ret;
 }

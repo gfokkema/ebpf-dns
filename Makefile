@@ -1,7 +1,7 @@
 CC=clang
 CFLAGS=-g -O -Wall -I/usr/include/bpf
 
-DEV=wlp4s0
+DEV=enp1s0
 
 BPF_PROG=bpf_demo.o
 XDP_PROG=xdp_demo.o

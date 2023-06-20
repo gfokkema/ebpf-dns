@@ -54,14 +54,13 @@ int xdp_prog(struct xdp_md *ctx)
     if (IS_IPV4(eth_proto))
     {
         if (!(ipv4 = parse_iphdr(&c))
-        ||  !(ipv4->protocol == IPPROTO_UDP))
-            return XDP_PASS;
-        if (!(udp = parse_udphdr(&c)) || !IS_DNS(udp))
-            return XDP_PASS;
-        if (!(dns = parse_dnshdr(&c)))
-            return XDP_PASS;
-        if (!(qname = parse_dname(&c, (void*)dns))
-        ||  !(qrr = parse_dns_qrr(&c)))
+        ||  !(ipv4->protocol == IPPROTO_UDP)
+        ||  !(udp = parse_udphdr(&c))
+        ||  !IS_DNS(udp)
+        ||  !(dns = parse_dnshdr(&c))
+        ||  !(qname = parse_dname(&c, (void*)dns))
+        ||  !(qrr = parse_dns_qrr(&c))
+        )
             return XDP_PASS;
 
         __u8 size = (__u8*)qrr - (__u8*)qname;
