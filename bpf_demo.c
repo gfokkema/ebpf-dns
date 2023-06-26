@@ -7,14 +7,6 @@ int outgoing_udp_dns(struct cursor c, struct iphdr *ip, struct udphdr *udp, stru
     debug_v4("TC UDP IP4", ip, udp->source, udp->dest);
     debug_dns("TC UDP DNS", dns);
 
-    __u8 *qname;
-    struct dns_qrr *qrr;
-
-    if (!(qname = parse_dname(&c, (void*)dns))
-    ||  !(qrr = parse_dns_qrr(&c)))
-        return TC_ACT_OK;
-    debug_qrr("TC UDP QRR", qrr, qname);
-
     if (!(dns->flags.as_bits_and_pieces.tc))
     {
         bpf_printk("TC UDP IP4: not truncated");
@@ -22,19 +14,27 @@ int outgoing_udp_dns(struct cursor c, struct iphdr *ip, struct udphdr *udp, stru
     }
     bpf_printk("TC UDP IP4: truncated, storing in map");
 
+    __u8 *qname;
+    struct dns_qrr *qrr;
+    if (!(qname = parse_dname(&c, (void*)dns))
+    ||  !(qrr = parse_dns_qrr(&c)))
+        return TC_ACT_OK;
+    debug_qrr("TC UDP QRR", qrr, qname);
+
     __u8 size = (__u8*)qrr - (__u8*)qname;
     if (size > sizeof(struct key))
         return TC_ACT_OK;
 
-    struct key key = {0};
-    bpf_probe_read_kernel(&key, size, qname);
+    struct key key = {qrr->qtype, qrr->qclass, {0}};
+    bpf_probe_read_kernel(&key.domain, size, qname);
 
     struct value *value = bpf_map_lookup_elem(&dns_results, &key);
-    struct value newval = {1};
+    struct value newval = {1, 0};
     if (value)
     {
         newval.count = value->count + 1;
-        bpf_printk("TC UDP MAP: %s: %d", key.domain, newval.count);
+        newval.size = value->size;
+        debug_map("TC UDP MAP", &key, &newval);
     }
     bpf_map_update_elem(&dns_results, &key, &newval, BPF_ANY);
 
@@ -46,6 +46,26 @@ int outgoing_tcp_dns(struct cursor c, struct iphdr *ip, struct tcphdr *tcp, stru
 {
     debug_v4("TC TCP IP4", ip, tcp->source, tcp->dest);
     debug_dns("TC TCP DNS", &dns->dnshdr);
+
+    __u8 *qname;
+    struct dns_qrr *qrr;
+    if (!(qname = parse_dname(&c, (void*)dns))
+    ||  !(qrr = parse_dns_qrr(&c)))
+        return TC_ACT_OK;
+    debug_qrr("TC TCP QRR", qrr, qname);
+
+    __u8 size = (__u8*)qrr - (__u8*)qname;
+    if (size > sizeof(struct key))
+        return TC_ACT_OK;
+
+    struct key key = {qrr->qtype, qrr->qclass, {0}};
+    struct value *value = bpf_map_lookup_elem(&dns_results, &key);
+    if (value)
+    {
+        struct value newval = {value->count, __bpf_htons(dns->length)};
+        bpf_map_update_elem(&dns_results, &key, &newval, BPF_ANY);
+        debug_map("TC TCP MAP", &key, &newval);
+    }
 
     return TC_ACT_OK;
 }
@@ -65,8 +85,7 @@ int read_dns(struct __sk_buff *skb)
  
     bpf_skb_pull_data(skb, skb->len);
     cursor_init(&c, skb);
-    if (!(eth = parse_eth(&c, &eth_proto))
-    ||  !(IS_IPV4(eth_proto) || IS_IPV6(eth_proto)))
+    if (!(eth = parse_eth(&c, &eth_proto)))
         return TC_ACT_OK;
 
     if (IS_IPV4(eth_proto))

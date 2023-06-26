@@ -42,9 +42,9 @@ int xdp_prog(struct xdp_md *ctx)
     struct ipv6hdr *ipv6;
     struct udphdr *udp;
     struct dnshdr *dns;
-
-    __u8 *qname;
     struct dns_qrr *qrr;
+    struct dns_rr *rr;
+    __u8 *qname;
  
     cursor_init(&c, ctx);
     if (!(eth = parse_eth(&c, &eth_proto)))
@@ -60,22 +60,32 @@ int xdp_prog(struct xdp_md *ctx)
         ||  !(dns = parse_dnshdr(&c))
         ||  !(qname = parse_dname(&c, (void*)dns))
         ||  !(qrr = parse_dns_qrr(&c))
+        ||  !(rr = parse_dns_rr(&c))
+        ||  !IS_DNS_OPT(rr)
         )
             return XDP_PASS;
+
+        debug_v4("XDP IP4", ipv4, udp->source, udp->dest);
+        debug_dns("XDP DNS", dns);
+        debug_qrr("XDP QRR", qrr, qname);
+        debug_rr("XDP RR", rr);
 
         __u8 size = (__u8*)qrr - (__u8*)qname;
         if (size > sizeof(struct key))
             return XDP_PASS;
 
-        struct key key = {0};
+        struct key key = {qrr->qtype, qrr->qclass, {0}};
         bpf_probe_read_kernel(&key, size, qname);
         struct value *value = bpf_map_lookup_elem(&dns_results, &key);
-        if (!value)  // Should check OPT record size
-            return XDP_PASS;
+        if (!value) return XDP_PASS;
+        debug_size("XDP", value, rr);
 
-        debug_print("XDP", eth, udp, dns);
-        debug_v4("XDP", ipv4, udp);
-        bpf_printk("XDP: %s -> %d", qname, value->count);
+        if (value->size <= __bpf_htons(rr->size))
+        {
+            bpf_printk("XDP: not truncated");
+            return XDP_PASS;
+        }
+        bpf_printk("XDP: truncated, cached response");
 
         swap_udp(udp);
         swap_ipv4(ipv4);
@@ -97,7 +107,7 @@ int xdp_prog(struct xdp_md *ctx)
         debug_print("XDP", eth, udp, dns);
         swap_ipv6(ipv6);
         swap_eth(eth);
-        debug_v6(ipv6, udp);
+        debug_v6(ipv6);
     }
 
     return XDP_TX;

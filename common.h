@@ -12,7 +12,8 @@
 
 #define memcpy __builtin_memcpy
 
-#define DNS_PORT 53
+#define DNS_PORT        53
+#define RR_TYPE_OPT     41
 
 #define IS_IPV4(P) P == __bpf_htons(ETH_P_IP)
 #define IS_IPV6(P) P == __bpf_htons(ETH_P_IPV6)
@@ -21,6 +22,7 @@
 #define IS_PORT(U, P)    (__bpf_htons(U->source) == P || __bpf_htons(U->dest) == P)
 #define IS_DNS(U)        IS_PORT(U, DNS_PORT)
 #define IS_DNS_ANSWER(P) ((P)->flags.as_bits_and_pieces.qr == 1)
+#define IS_DNS_OPT(R)    (__bpf_htons(R->type) == RR_TYPE_OPT)
 
 struct cursor
 {
@@ -67,12 +69,25 @@ struct dns_qrr {
     __u16 qclass;
 };
 
+struct dns_rr {
+    __u8 root;
+    __u16 type;
+    __u16 size;
+    __u8 rcode;
+    __u8 version;
+    __u16 reserved;
+    __u16 rdata_len;
+} __attribute__((packed));
+
 struct key {
+    __u8 type;
+    __u8 class;
     __u8 domain[64];  // max label len = 63
 };
 
 struct value {
     __u64 count;
+    __u16 size;
 };
 
 struct {
@@ -103,6 +118,7 @@ PARSE_FUNC_DECLARATION(tcphdr)
 PARSE_FUNC_DECLARATION(dnshdr)
 PARSE_FUNC_DECLARATION(tcpdnshdr)
 PARSE_FUNC_DECLARATION(dns_qrr)
+PARSE_FUNC_DECLARATION(dns_rr)
 
 static __always_inline
 struct ethhdr *parse_eth(struct cursor *c, __u16 *eth_proto)
@@ -222,6 +238,19 @@ void debug_dns(char* pre, struct dnshdr *dns)
 }
 
 static __always_inline
+void debug_map(char* pre, struct key *key, struct value *value)
+{
+    bpf_printk("%s: [%s] ty:%d cls:%d cnt:%d sz:%d",
+        pre,
+        key->domain,
+        key->type,
+        key->class,
+        value->count,
+        value->size
+    );
+}
+
+static __always_inline
 void debug_qrr(char* pre, struct dns_qrr* qrr, __u8* qname)
 {
     bpf_printk("%s: qcls:%d qty:%d | \"%s\"",
@@ -229,6 +258,27 @@ void debug_qrr(char* pre, struct dns_qrr* qrr, __u8* qname)
         __bpf_htons(qrr->qclass),
         __bpf_htons(qrr->qtype),
         qname
+    );
+}
+
+static __always_inline
+void debug_rr(char* pre, struct dns_rr* rr)
+{
+    bpf_printk("%s: %d -> %d (%d)",
+        pre,
+        __bpf_htons(rr->type),
+        __bpf_htons(rr->rdata_len),
+        __bpf_htons(rr->size)
+    );
+}
+
+static __always_inline
+void debug_size(char* pre, struct value* value, struct dns_rr* rr)
+{
+    bpf_printk("%s: packet size: %d, rr size: %d",
+        pre,
+        value->size,
+        __bpf_htons(rr->size)
     );
 }
 
