@@ -45,6 +45,7 @@ int xdp_prog(struct xdp_md *ctx)
     struct dns_qrr *qrr;
     struct dns_rr *rr;
     __u8 *qname;
+    __u16 pkt_size = DNS_PKT_MIN;
  
     cursor_init(&c, ctx);
     if (!(eth = parse_eth(&c, &eth_proto)))
@@ -60,15 +61,12 @@ int xdp_prog(struct xdp_md *ctx)
         ||  !(dns = parse_dnshdr(&c))
         ||  !(qname = parse_dname(&c, (void*)dns))
         ||  !(qrr = parse_dns_qrr(&c))
-        ||  !(rr = parse_dns_rr(&c))
-        ||  !IS_DNS_OPT(rr)
         )
             return XDP_PASS;
 
         debug_v4("XDP IP4", ipv4, udp->source, udp->dest);
         debug_dns("XDP DNS", dns);
         debug_qrr("XDP QRR", qrr, qname);
-        debug_rr("XDP RR", rr);
 
         __u8 size = (__u8*)qrr - (__u8*)qname;
         if (size > sizeof(struct key))
@@ -78,9 +76,15 @@ int xdp_prog(struct xdp_md *ctx)
         bpf_probe_read_kernel(&key, size, qname);
         struct value *value = bpf_map_lookup_elem(&dns_results, &key);
         if (!value) return XDP_PASS;
-        debug_size("XDP", value, rr);
 
-        if (value->size <= __bpf_htons(rr->size))
+        if ((rr = parse_dns_rr(&c)) && IS_DNS_OPT(rr))
+        {
+            pkt_size = DNS_CLAMP(__bpf_htons(rr->size));
+            debug_rr("XDP RR", rr);
+            debug_size("XDP", value, rr);
+        }
+
+        if (value->size <= pkt_size)
         {
             bpf_printk("XDP: not truncated");
             return XDP_PASS;

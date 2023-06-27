@@ -11,13 +11,18 @@
 #include <bpf/bpf_helpers.h>
 
 #define memcpy __builtin_memcpy
+#define MAX(x, y) (((x) > (y)) ? (x) : (y))
+#define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
 #define DNS_PORT        53
 #define RR_TYPE_OPT     41
+#define DNS_PKT_MIN     512
+#define DNS_PKT_MAX     4096
+#define DNS_CLAMP(S)    MIN(DNS_PKT_MAX, MAX(DNS_PKT_MIN, S))
 
-#define IS_IPV4(P) P == __bpf_htons(ETH_P_IP)
-#define IS_IPV6(P) P == __bpf_htons(ETH_P_IPV6)
-#define IS_VLAN(P) P == __bpf_htons(ETH_P_8021Q) || P == __bpf_htons(ETH_P_8021AD)
+#define IS_IPV4(P)      P == __bpf_htons(ETH_P_IP)
+#define IS_IPV6(P)      P == __bpf_htons(ETH_P_IPV6)
+#define IS_VLAN(P)      P == __bpf_htons(ETH_P_8021Q) || P == __bpf_htons(ETH_P_8021AD)
 
 #define IS_PORT(U, P)    (__bpf_htons(U->source) == P || __bpf_htons(U->dest) == P)
 #define IS_DNS(U)        IS_PORT(U, DNS_PORT)
