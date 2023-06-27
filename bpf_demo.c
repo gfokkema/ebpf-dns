@@ -29,10 +29,11 @@ int outgoing_udp_dns(struct cursor c, struct iphdr *ip, struct udphdr *udp, stru
     bpf_probe_read_kernel(&key.domain, size, qname);
 
     struct value *value = bpf_map_lookup_elem(&dns_results, &key);
-    struct value newval = {1, 0};
+    struct value newval = {1, 0, 0};
     if (value)
     {
-        newval.count = value->count + 1;
+        newval.total = value->total + 1;
+        newval.cached = value->cached;
         newval.size = value->size;
         debug_map("TC UDP MAP", &key, &newval);
     }
@@ -62,7 +63,7 @@ int outgoing_tcp_dns(struct cursor c, struct iphdr *ip, struct tcphdr *tcp, stru
     struct value *value = bpf_map_lookup_elem(&dns_results, &key);
     if (value)
     {
-        struct value newval = {value->count, __bpf_htons(dns->length)};
+        struct value newval = {value->total, value->cached, __bpf_htons(dns->length)};
         bpf_map_update_elem(&dns_results, &key, &newval, BPF_ANY);
         debug_map("TC TCP MAP", &key, &newval);
     }

@@ -91,7 +91,8 @@ struct key {
 };
 
 struct value {
-    __u64 count;
+    __u64 total;
+    __u64 cached;
     __u16 size;
 };
 
@@ -250,7 +251,7 @@ void debug_map(char* pre, struct key *key, struct value *value)
         key->domain,
         key->type,
         key->class,
-        value->count,
+        value->total,
         value->size
     );
 }
@@ -278,12 +279,14 @@ void debug_rr(char* pre, struct dns_rr* rr)
 }
 
 static __always_inline
-void debug_size(char* pre, struct value* value, struct dns_rr* rr)
+void debug_size(char* pre, struct value* value, __u16 size)
 {
-    bpf_printk("%s: packet size: %d, rr size: %d",
+    bpf_printk("%s: (%d/%d) packet size: %d, rr size: %d",
         pre,
+        value->cached,
+        value->total,
         value->size,
-        __bpf_htons(rr->size)
+        size
     );
 }
 

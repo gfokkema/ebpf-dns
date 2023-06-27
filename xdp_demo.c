@@ -81,7 +81,6 @@ int xdp_prog(struct xdp_md *ctx)
         {
             pkt_size = DNS_CLAMP(__bpf_htons(rr->size));
             debug_rr("XDP RR", rr);
-            debug_size("XDP", value, rr);
         }
 
         if (value->size <= pkt_size)
@@ -90,6 +89,9 @@ int xdp_prog(struct xdp_md *ctx)
             return XDP_PASS;
         }
         bpf_printk("XDP: truncated, cached response");
+        struct value newval = {value->total + 1, value->cached + 1, value->size};
+        bpf_map_update_elem(&dns_results, &key, &newval, BPF_ANY);
+        debug_size("XDP", &newval, pkt_size);
 
         swap_udp(udp);
         swap_ipv4(ipv4);
